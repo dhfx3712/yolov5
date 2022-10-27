@@ -122,8 +122,8 @@ class ComputeLoss:
         lcls = torch.zeros(1, device=self.device)  # class loss
         lbox = torch.zeros(1, device=self.device)  # box loss
         lobj = torch.zeros(1, device=self.device)  # object loss
-        tcls, tbox, indices, anchors = self.build_targets(p, targets)  # targets
-
+        tcls, tbox, indices, anchors = self.build_targets(p, targets)  # targets gt在特征图的映射以及扩充
+        print (f'build_target_return : {len(tcls)},{len(tbox)},{len(indices)},{len(anchors)}')
         # Losses
         for i, pi in enumerate(p):  # layer index, layer predictions
             b, a, gj, gi = indices[i]  # image, anchor, gridy, gridx
@@ -132,12 +132,14 @@ class ComputeLoss:
             n = b.shape[0]  # number of targets
             if n:
                 # pxy, pwh, _, pcls = pi[b, a, gj, gi].tensor_split((2, 4, 5), dim=1)  # faster, requires torch 1.8.0
+                #pi[b, a, gj, gi]过滤pi特征图，与build_targets扩充后的数据保持一致
                 pxy, pwh, _, pcls = pi[b, a, gj, gi].split((2, 2, 1, self.nc), 1)  # target-subset of predictions
 
                 # Regression
                 pxy = pxy.sigmoid() * 2 - 0.5
                 pwh = (pwh.sigmoid() * 2) ** 2 * anchors[i]
                 pbox = torch.cat((pxy, pwh), 1)  # predicted box
+                print (f'pbox_shape : {pbox.shape}  tbox : {tbox[i].shape}')
                 iou = bbox_iou(pbox, tbox[i], CIoU=True).squeeze()  # iou(prediction, target)
                 lbox += (1.0 - iou).mean()  # iou loss
 
@@ -177,6 +179,7 @@ class ComputeLoss:
     def build_targets(self, p, targets):
         # Build targets for compute_loss(), input targets(image,class,x,y,w,h)
         na, nt = self.na, targets.shape[0]  # number of anchors, targets
+        print (f'build_target : na - {na}   nt - {nt}')
         tcls, tbox, indices, anch = [], [], [], []
         gain = torch.ones(7, device=self.device)  # normalized to gridspace gain
         ai = torch.arange(na, device=self.device).float().view(na, 1).repeat(1, nt)  # same as .repeat_interleave(nt)
@@ -193,34 +196,40 @@ class ComputeLoss:
                 # [1, 1], [1, -1], [-1, 1], [-1, -1],  # jk,jm,lk,lm
             ],
             device=self.device).float() * g  # offsets
-
-        for i in range(self.nl):
+        for i in range(self.nl): #nl特征图层数
             anchors, shape = self.anchors[i], p[i].shape
-            gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain
+            #按比例缩放后的anchor。 i - 0, anchors - tensor([[1.25000, 1.62500]， [2.00000, 3.75000], [4.12500, 2.87500]])，shape - torch.Size([1, 3, 80, 80, 85])
+            # print (f'build_target :  i - {i}, anchors - {anchors} ,shape - {shape}')
+            print (f'build_target_xyxy : {torch.tensor(shape)[[3, 2, 3, 2]]}') #tensor([80, 80, 80, 80])
+            gain[2:6] = torch.tensor(shape)[[3, 2, 3, 2]]  # xyxy gain [80, 80, 80, 80]赋值到gain[2:6]
 
             # Match targets to anchors
-            t = targets * gain  # shape(3,n,7)
+            t = targets * gain  # shape(3,n,7) #每个特征图3个anchor
+            print (f'build_target_t :  t - {t.shape}')
             if nt:
                 # Matches
                 r = t[..., 4:6] / anchors[:, None]  # wh ratio
-                j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  # compare
+                j = torch.max(r, 1 / r).max(2)[0] < self.hyp['anchor_t']  # compare hyp.scratch-low
                 # j = wh_iou(anchors, t[:, 4:6]) > model.hyp['iou_t']  # iou(3,n)=wh_iou(anchors(3,2), gwh(n,2))
                 t = t[j]  # filter
+                print (f'build_target_t-filter :  t - {t.shape}  j - {j.shape}') #j 二维总数，判断哪些需要过滤。
 
                 # Offsets
                 gxy = t[:, 2:4]  # grid xy
                 gxi = gain[[2, 3]] - gxy  # inverse
                 j, k = ((gxy % 1 < g) & (gxy > 1)).T
                 l, m = ((gxi % 1 < g) & (gxi > 1)).T
-                j = torch.stack((torch.ones_like(j), j, k, l, m))
+                print (f'build_target_positive_sample : j-{j} ,k-{k} ,l-{l} ,m-{m}')
+                j = torch.stack((torch.ones_like(j), j, k, l, m)) #torch.ones_like生成与input形状相同、元素全为1的张量
                 t = t.repeat((5, 1, 1))[j]
+                print(f'build_target_repeat_t: {t.shape} ')
                 offsets = (torch.zeros_like(gxy)[None] + off[:, None])[j]
             else:
                 t = targets[0]
                 offsets = 0
 
             # Define
-            bc, gxy, gwh, a = t.chunk(4, 1)  # (image, class), grid xy, grid wh, anchors
+            bc, gxy, gwh, a = t.chunk(4, 1)  # (image, class), grid xy, grid wh, anchors 按轴拆分数据。1轴拆分4份
             a, (b, c) = a.long().view(-1), bc.long().T  # anchors, image, class
             gij = (gxy - offsets).long()
             gi, gj = gij.T  # grid indices
