@@ -81,16 +81,20 @@ def process_batch(detections, labels, iouv):
     correct = np.zeros((detections.shape[0], iouv.shape[0])).astype(bool)
     iou = box_iou(labels[:, 1:], detections[:, :4])
     correct_class = labels[:, 0:1] == detections[:, 5]
-    for i in range(len(iouv)):
+    print (f'process_bath : {correct_class.shape}')#(label,pred)预测矩阵
+    for i in range(len(iouv)): #遍历每个阈值
         x = torch.where((iou >= iouv[i]) & correct_class)  # IoU > threshold and classes match
+        print (f'process_bath_iouv_{i} : {x}')
         if x[0].shape[0]:
             matches = torch.cat((torch.stack(x, 1), iou[x[0], x[1]][:, None]), 1).cpu().numpy()  # [label, detect, iou]
-            if x[0].shape[0] > 1:
+            print (f'matches : {matches.shape}  stack_x : {torch.stack(x, 1).shape}  iou : {iou[x[0], x[1]][:, None].shape} ')
+            if x[0].shape[0] > 1: #排序
                 matches = matches[matches[:, 2].argsort()[::-1]]
-                matches = matches[np.unique(matches[:, 1], return_index=True)[1]]
+                matches = matches[np.unique(matches[:, 1], return_index=True)[1]] #预测框找最大的
                 # matches = matches[matches[:, 2].argsort()[::-1]]
-                matches = matches[np.unique(matches[:, 0], return_index=True)[1]]
-            correct[matches[:, 1].astype(int), i] = True
+                matches = matches[np.unique(matches[:, 0], return_index=True)[1]] #label找最大的
+                print (f'match_argsort : {matches.shape}')
+            correct[matches[:, 1].astype(int), i] = True #对应correct赋值
     return torch.tensor(correct, dtype=torch.bool, device=iouv.device)
 
 
@@ -215,8 +219,9 @@ def run(
             loss += compute_loss(train_out, targets)[1]  # box, obj, cls
 
         # NMS
-        targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels
+        targets[:, 2:] *= torch.tensor((width, height, width, height), device=device)  # to pixels 比例缩放
         lb = [targets[targets[:, 0] == i, 1:] for i in range(nb)] if save_hybrid else []  # for autolabelling
+        print (f'autolabel : {lb}') #[]
         with dt[2]:
             preds = non_max_suppression(preds,
                                         conf_thres,
@@ -225,10 +230,12 @@ def run(
                                         multi_label=True,
                                         agnostic=single_cls,
                                         max_det=max_det)
-
+        print (f'non_max_suppression : {len(preds)},targets : {targets.shape}') #返回数据长度跟bs相关
         # Metrics
-        for si, pred in enumerate(preds): #按特征图提取3层
+        for si, pred in enumerate(preds): #
+            print(f'val_pred : {pred.shape} , si : {si}') # si batch第几个样本
             labels = targets[targets[:, 0] == si, 1:]
+            print(f'gt_labels : {labels.shape}')
             nl, npr = labels.shape[0], pred.shape[0]  # number of labels, predictions
             path, shape = Path(paths[si]), shapes[si][0]
             correct = torch.zeros(npr, niou, dtype=torch.bool, device=device)  # init
@@ -245,12 +252,14 @@ def run(
             if single_cls:
                 pred[:, 5] = 0
             predn = pred.clone()
-            scale_boxes(im[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred
+            scale_boxes(im[si].shape[1:], predn[:, :4], shape, shapes[si][1])  # native-space pred 图像pad缩放
 
             # Evaluate
             if nl:
                 tbox = xywh2xyxy(labels[:, 1:5])  # target boxes
+                print(f'scale_box_b : {tbox.shape}' )
                 scale_boxes(im[si].shape[1:], tbox, shape, shapes[si][1])  # native-space labels
+                print (f'scale_box_f : {tbox.shape}')
                 labelsn = torch.cat((labels[:, 0:1], tbox), 1)  # native-space labels
                 correct = process_batch(predn, labelsn, iouv)
                 if plots:
