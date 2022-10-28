@@ -202,6 +202,7 @@ class DetectionModel(BaseModel):
         initialize_weights(self)
         self.info()
         LOGGER.info('')
+        print (f'self.model : {self.model.__dict__()}')
 
     def forward(self, x, augment=False, profile=False, visualize=False):
         if augment:

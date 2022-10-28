@@ -74,7 +74,7 @@ def attempt_load(weights, device=None, inplace=True, fuse=True):
     # Loads an ensemble of models weights=[a,b,c] or a single model weights=[a] or weights=a
     from models.yolo import Detect, Model
 
-    model = Ensemble()
+    model = Ensemble() #权重列表
     for w in weights if isinstance(weights, list) else [weights]:
         ckpt = torch.load(attempt_download(w), map_location='cpu')  # load
         ckpt = (ckpt.get('ema') or ckpt['model']).to(device).float()  # FP32 model
@@ -87,12 +87,16 @@ def attempt_load(weights, device=None, inplace=True, fuse=True):
 
         model.append(ckpt.fuse().eval() if fuse and hasattr(ckpt, 'fuse') else ckpt.eval())  # model in eval mode
 
+    # print (f'val_model : {model.modules()}')
     # Module compatibility updates
     for m in model.modules():
         t = type(m)
+        print(f'val_model : {m} , {t} ')
         if t in (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU, Detect, Model):
+            print (f'inplace : {m.inplace}') #不是所有对象有inplace属性
             m.inplace = inplace  # torch 1.7.0 compatibility
             if t is Detect and not isinstance(m.anchor_grid, list):
+                print (f'detect : {m.anchor_grid}, {m.nl}')
                 delattr(m, 'anchor_grid')
                 setattr(m, 'anchor_grid', [torch.zeros(1)] * m.nl)
         elif t is nn.Upsample and not hasattr(m, 'recompute_scale_factor'):
